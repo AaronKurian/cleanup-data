@@ -2,6 +2,8 @@
 """
 Assign sequential integer ``id`` to each object in a JSON array of recipes.
 
+Each object is written with ``id`` as the **first** field (insertion order preserved in JSON).
+
 Usage:
   python3 add_recipe_ids.py -i new_recipee_data.json -o new_recipee_data.json
   python3 add_recipe_ids.py -i in.json -o out.json              # write to new file
@@ -42,20 +44,27 @@ def main() -> None:
         print("Expected a JSON array at top level.", file=sys.stderr)
         sys.exit(1)
 
+    out_list: list = []
     for i, item in enumerate(data):
         if not isinstance(item, dict):
             print(f"Item at index {i} is not an object; skipping id assignment.", file=sys.stderr)
+            out_list.append(item)
             continue
+
         if args.only_missing and "id" in item:
-            continue
-        item["id"] = i + 1
+            rid = item["id"]
+        else:
+            rid = i + 1
+
+        rest = {k: v for k, v in item.items() if k != "id"}
+        out_list.append({"id": rid, **rest})
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=args.indent)
+        json.dump(out_list, f, ensure_ascii=False, indent=args.indent)
         f.write("\n")
 
-    print(f"Wrote {len(data)} recipe(s) → {out}")
+    print(f"Wrote {len(out_list)} recipe(s) → {out}")
 
 
 if __name__ == "__main__":
