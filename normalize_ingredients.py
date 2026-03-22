@@ -459,6 +459,9 @@ def normalize_ingredient_deterministic(ing: str) -> str | None:
     # Drop literal "None" from dataset
     if orig.lower() == "none":
         return None
+    # Recipe yield notes, not ingredients: "(makes 1 cup)", "Makes about 2 cups"
+    if re.match(r"^\s*\(?\s*(?:makes|yields)\b", orig, re.IGNORECASE):
+        return None
     # 3. Single-token unit (e.g. "cup") — reject before parsing or LLM
     if orig.lower() in FINAL_UNITS:
         return None
@@ -492,6 +495,8 @@ def normalize_ingredient_deterministic(ing: str) -> str | None:
 
     # 3. Ingredient-info / accompaniments / makes lines — not real ingredients
     if cleaned.lower().startswith(("ingredient info", "accompaniments", "makes")):
+        return None
+    if re.match(r"^\s*\(?\s*makes\b", cleaned, re.IGNORECASE):
         return None
 
     # 7. Cooking equipment — not ingredients

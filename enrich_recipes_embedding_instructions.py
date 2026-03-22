@@ -66,7 +66,19 @@ QTY_RE = re.compile(r"^\d+(\.\d+)?$")
 # Ingredient line filtering (not food / not for embedding)
 # ---------------------------------------------------------------------------
 _ING_JUNK_PREFIX = re.compile(
-    r"^\s*(ingredient\s+info|accompaniments?|makes\b)",
+    r"^\s*(?:\(\s*)?(?:ingredient\s+info|accompaniments?|makes|yields)\b",
+    re.IGNORECASE,
+)
+# Bad LLM/OCR lines: no quantity but starts with container word + name
+_BARE_CONTAINER_INGREDIENT = re.compile(
+    r"^\s*(?:packet|bag|box|tin|jar|bottle|carton)\s+\S",
+    re.IGNORECASE,
+)
+# "pepper" in unique_ingredient_names maps to black pepper — must not match inside "green bell pepper"
+_CHILE_OR_BELL_PEPPER_CONTEXT = re.compile(
+    r"\b(?:green|red|yellow|orange)\s+bell\s+pepper\b|"
+    r"\b(?:cayenne|chile|chili|chilli|sweet|aleppo|ghost|habanero|jalapeño|jalapeno|serrano|"
+    r"anaheim|poblano|shishito|banana|scotch\s+bonnet)\s+pepper\b",
     re.IGNORECASE,
 )
 _DISPOSABLE_OR_FOIL = re.compile(
@@ -84,12 +96,28 @@ _EMBEDDING_CANONICAL_OVERRIDES: dict[str, str] = {
     "crushed tomatoes": "tomato",
     "crushed tomato": "tomato",
     "cherry tomatoes": "cherry tomato",
+    "lemon wedge": "lemon",
+    "lemon wedges": "lemon",
+    "lemon wedge piece": "lemon",
+    "lemon wedges piece": "lemon",
 }
 
 
 def _apply_embedding_overrides(std: str) -> str:
     s = std.strip().lower()
-    return _EMBEDDING_CANONICAL_OVERRIDES.get(s, s)
+    s = _EMBEDDING_CANONICAL_OVERRIDES.get(s, s)
+    # Garnish phrasing left in normalized names → single token
+    if re.match(r"^lemon\s+wedges?(?:\s+piece)?$", s):
+        return "lemon"
+    return s
+
+
+def _pepper_map_key_is_false_positive(key: str, line_lower: str, candidate: str) -> bool:
+    """Avoid mapping key 'pepper' → black pepper when line is bell/chile-type pepper."""
+    if key.lower() != "pepper":
+        return False
+    ctx = f"{line_lower} :: {candidate}"
+    return bool(_CHILE_OR_BELL_PEPPER_CONTEXT.search(ctx))
 
 # Non-food / fuel — exclude from ing_embedding_text
 _FUEL_OR_NONFOOD_EMBEDDING = re.compile(
@@ -113,6 +141,11 @@ def should_skip_ingredient_line(line: str) -> bool:
     low = s.lower()
     if _ING_JUNK_PREFIX.match(s):
         return True
+    # Standalone "(makes 1 cup)" with leading paren only
+    if re.match(r"^\s*\(\s*makes\b", s, re.IGNORECASE):
+        return True
+    if _BARE_CONTAINER_INGREDIENT.match(s) and not re.match(r"^\d", s):
+        return True
     if _DISPOSABLE_OR_FOIL.search(s):
         return True
     if _DIMENSION_GARBAGE.search(s):
@@ -120,8 +153,12 @@ def should_skip_ingredient_line(line: str) -> bool:
 
     n = normalize_ingredient_deterministic(s)
     if n is None:
-        # Keep salt / pepper lines without quantities
+        # Keep salt / pepper lines without quantities (but not recipe notes / junk)
         if not re.match(r"^\d", low):
+            if _ING_JUNK_PREFIX.match(s) or re.match(r"^\s*\(\s*makes\b", s, re.IGNORECASE):
+                return True
+            if _BARE_CONTAINER_INGREDIENT.match(s):
+                return True
             return False
         # Numbered line the normalizer could not parse → likely equipment / OCR junk
         if any(w in low for w in EQUIPMENT_WORDS):
@@ -255,6 +292,8 @@ def map_ingredient_to_standard(ing_line: str, mapping: dict[str, str]) -> str | 
     for k, v in mapping.items():
         kl = k.lower()
         if kl in line_lower or (candidate and kl in candidate):
+            if _pepper_map_key_is_false_positive(k, line_lower, candidate):
+                continue
             if len(k) > best_key_len:
                 best_key_len = len(k)
                 best_val = v
@@ -264,9 +303,13 @@ def map_ingredient_to_standard(ing_line: str, mapping: dict[str, str]) -> str | 
         return std if is_valid_embedding_name(std) else None
 
     for k, v in sorted(mapping.items(), key=lambda x: -len(x[0])):
-        if k.lower() in line_lower:
-            std = _apply_embedding_overrides(v.strip().lower())
-            return std if is_valid_embedding_name(std) else None
+        kl = k.lower()
+        if kl not in line_lower:
+            continue
+        if _pepper_map_key_is_false_positive(k, line_lower, candidate):
+            continue
+        std = _apply_embedding_overrides(v.strip().lower())
+        return std if is_valid_embedding_name(std) else None
 
     if candidate:
         std = _canonicalize_embedding_fallback(candidate.split(",")[0].strip().lower())
