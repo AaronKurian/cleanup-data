@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
 Assign sequential integer ``id`` to each object in a JSON array of recipes.
-
 Each object is written with ``id`` as the **first** field (insertion order preserved in JSON).
-
 Usage:
   python3 add_recipe_ids.py -i new_recipee_data.json -o new_recipee_data.json
   python3 add_recipe_ids.py -i in.json -o out.json              # write to new file
