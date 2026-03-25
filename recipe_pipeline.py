@@ -3501,10 +3501,9 @@ def enrich_main() -> None:
                 sys.exit(1)
             if ck.get("input_path") != str(inp):
                 print(
-                    "Checkpoint input_path does not match --input; refusing to resume.",
+                    "Note: checkpoint input_path differs from current --input (continuing; input_sha256 matches).",
                     file=sys.stderr,
                 )
-                sys.exit(1)
             if int(ck.get("limit", -1)) != n:
                 print("Checkpoint --limit does not match; refusing to resume.", file=sys.stderr)
                 sys.exit(1)
@@ -3823,8 +3822,10 @@ def pipeline_main() -> None:
                 print("Checkpoint input_sha256 mismatch; refusing to resume.", file=sys.stderr)
                 sys.exit(1)
             if ck.get("input_path") != str(inp):
-                print("Checkpoint input_path mismatch; refusing to resume.", file=sys.stderr)
-                sys.exit(1)
+                print(
+                    "Note: checkpoint input_path differs from --input (continuing; input_sha256 matches).",
+                    file=sys.stderr,
+                )
             if int(ck.get("limit", -1)) != n:
                 print("Checkpoint --limit mismatch; refusing to resume.", file=sys.stderr)
                 sys.exit(1)
