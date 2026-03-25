@@ -19,10 +19,12 @@ Per-recipe enrich order (``enrich`` / ``run``):
   6. ``ing_embedding_text`` from ingredients only (``process_recipe``).
 
 Progress: recipe-level loaders print to stderr (\r bar) unless --quiet / --no-progress.
+ETA uses throughput since process start (correct after ``--resume``). Ollama GPU: set ``OLLAMA_NUM_GPU`` (default in code: 999 layers on GPU) or ``OLLAMA_NUM_GPU=auto`` to let the server choose.
 
-Enrich writes ``out.json`` (default) after **each** recipe via atomic replace; companion
-``out.json.checkpoint.json`` tracks resume position. Use ``--resume`` with the same
-``--input``, ``--limit``, ``--keep-rest``, and ``--output`` as the interrupted run.
+Enrich writes ``out.json`` (default) via atomic replace; by default after **each** recipe, or
+every ``--checkpoint-every N`` recipes for less disk I/O. Companion ``out.json.checkpoint.json``
+tracks resume position. Use ``--resume`` with the same ``--input``, ``--limit`` (``0`` = whole file),
+``--keep-rest``, ``--checkpoint-every``, and ``--output`` as the interrupted run.
 Fresh run when ``out.json`` exists requires ``--force`` to overwrite.
 """
 
@@ -35,6 +37,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -47,8 +51,120 @@ import requests
 # Override with env: OLLAMA_GENERATE_TIMEOUT=1200
 _DEFAULT_READ_TIMEOUT = float(os.environ.get("OLLAMA_GENERATE_TIMEOUT", "600"))
 
+# Ollama runs inference in its server process; GPU use is controlled there. Each request can
+# pass ``options`` (e.g. num_gpu layers on VRAM). Defaults favor GPU offload on systems with
+# a CUDA GPU (GTX/RTX). Set OLLAMA_NUM_GPU=0 for CPU-only, or OLLAMA_NUM_GPU=auto to omit
+# num_gpu and let Ollama pick. Optional JSON merge: OLLAMA_EXTRA_OPTIONS='{"num_thread":8}'
+def _ollama_inference_options() -> dict:
+    opts: dict = {}
+    raw = os.environ.get("OLLAMA_NUM_GPU", "999").strip()
+    if raw and raw.lower() not in ("auto", "default"):
+        try:
+            opts["num_gpu"] = int(raw)
+        except ValueError:
+            pass
+    extra = os.environ.get("OLLAMA_EXTRA_OPTIONS", "").strip()
+    if extra:
+        try:
+            opts.update(json.loads(extra))
+        except json.JSONDecodeError:
+            pass
+    return opts
+
+
+def _find_nvidia_smi() -> str | None:
+    """Resolve nvidia-smi: PATH, then typical Windows NVSMI install path."""
+    p = shutil.which("nvidia-smi")
+    if p:
+        return p
+    if sys.platform == "win32":
+        for base in (
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramW6432", r"C:\Program Files"),
+        ):
+            candidate = Path(base) / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def _print_gpu_and_ollama_status() -> None:
+    """
+    Print whether the NVIDIA driver CLI is available and what ``ollama ps`` reports
+    (PROCESSOR column: 100%% GPU vs 100%% CPU). Runs when Ollama is connected.
+    """
+    if os.environ.get("RECIPE_PIPELINE_NO_GPU_INFO", "").strip() in ("1", "true", "yes"):
+        return
+
+    def _run(argv: list[str], timeout: float = 12.0) -> subprocess.CompletedProcess[str]:
+        kw: dict = {
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+        }
+        if sys.platform == "win32":
+            kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+        return subprocess.run(argv, **kw)
+
+    print("[GPU check]", flush=True)
+    nv = _find_nvidia_smi()
+    if nv:
+        try:
+            r = _run([nv, "-L"])
+            if r.returncode == 0 and (r.stdout or "").strip():
+                print(f"  nvidia-smi: OK ({nv})", flush=True)
+                for line in (r.stdout or "").strip().splitlines()[:6]:
+                    print(f"    {line}", flush=True)
+            else:
+                print(
+                    f"  nvidia-smi exists but failed (exit {r.stderr or r.stdout or r.returncode}).",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(f"  nvidia-smi error: {e}", file=sys.stderr, flush=True)
+    else:
+        print(
+            "  nvidia-smi: not found (not on PATH; not under …\\NVIDIA Corporation\\NVSMI). "
+            "Install/update NVIDIA drivers if you expect a GeForce GPU.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    ox = shutil.which("ollama")
+    if not ox:
+        print("  ollama CLI: not on PATH (cannot run `ollama ps`).", file=sys.stderr, flush=True)
+        return
+    try:
+        r = _run([ox, "ps"])
+        out = (r.stdout or "").rstrip()
+        if not out:
+            print("  ollama ps: (no output)", flush=True)
+            return
+        print("  ollama ps — PROCESSOR shows whether the loaded model uses GPU:", flush=True)
+        for line in out.splitlines():
+            print(f"    {line}", flush=True)
+        body = "\n".join(out.splitlines()[1:])  # skip header
+        if "% GPU" in body or " GPU " in body:
+            print("  → Ollama reports GPU use for a loaded model.", flush=True)
+        elif "100% CPU" in body:
+            print(
+                "  → Ollama reports 100% CPU (no GPU for loaded models). "
+                "Fix drivers / GPU visibility; pipeline will still run but slowly.",
+                file=sys.stderr,
+                flush=True,
+            )
+        elif "NAME" in out and not body.strip():
+            print(
+                "  → No model loaded in Ollama yet; PROCESSOR appears after the first inference.",
+                flush=True,
+            )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  ollama ps error: {e}", file=sys.stderr, flush=True)
+
+
 # Preferred model for normalize_ingredients.py (quantized Qwen 7B — good for ~16GB RAM / CPU)
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:3b"
 
 
 class OllamaClient:
@@ -106,6 +222,9 @@ class OllamaClient:
         """
         try:
             payload = {"model": model, "prompt": prompt, "stream": stream}
+            oopts = _ollama_inference_options()
+            if oopts:
+                payload["options"] = oopts
 
             response = requests.post(
                 f"{self.base_url}/api/generate",
@@ -148,6 +267,9 @@ class OllamaClient:
         """
         try:
             payload = {"model": model, "messages": messages, "stream": False}
+            oopts = _ollama_inference_options()
+            if oopts:
+                payload["options"] = oopts
 
             response = requests.post(
                 f"{self.base_url}/api/chat", json=payload, timeout=30
@@ -1334,6 +1456,7 @@ def normalize_main():
             use_ollama = False
         else:
             print(f"Using Ollama model: {args.model}")
+            _print_gpu_and_ollama_status()
 
     next_index = 0
     if args.resume:
@@ -1439,7 +1562,13 @@ def normalize_main():
 
             done = i + 1
             elapsed = time.perf_counter() - progress_t0
-            eta_sec = (chunk_len - done) * (elapsed / done) if done else None
+            # Rate must use recipes finished *this session*; after --resume, ``done`` includes prior index.
+            completed_this_run = done - next_index
+            eta_sec = (
+                (chunk_len - done) * (elapsed / completed_this_run)
+                if completed_this_run > 0
+                else None
+            )
             if show_progress and (done % progress_every == 0 or done == chunk_len):
                 line = _progress_line(
                     done=done,
@@ -3130,7 +3259,7 @@ def process_recipe(
     model: str,
     use_ollama: bool,
     use_ollama_instructions: bool = False,
-) -> dict:
+) -> tuple[dict, dict]:
     """
     Stages (after ``_process_single_recipe`` has normalized ingredients + instruction text):
 
@@ -3138,7 +3267,10 @@ def process_recipe(
        ``standardize_instruction_step`` (nutrition strip, etc.). Output uses one ``instructions``
        field only (standardized), not a separate ``instructions_standardized``.
     6. Build ``ing_embedding_text`` from ingredients plus ``tags.ingredient`` (deduped; last key).
+
+    Returns ``(recipe_dict, extra_stats)`` where ``extra_stats`` includes ``instruction_ollama`` (0 or 1).
     """
+    extra_stats: dict = {"instruction_ollama": 0}
     raw_ings = recipe.get("ingredients") or []
     ingredients_clean = dedupe_and_sort_ingredient_lines(filter_ingredient_lines(raw_ings))
     ingredients_clean = [
@@ -3172,6 +3304,7 @@ def process_recipe(
             )
             if ollama_inst is not None:
                 instructions_std = ollama_inst
+                extra_stats["instruction_ollama"] = 1
             else:
                 instructions_std = _build_instructions_deterministic_from_pairs(raw_steps)
         else:
@@ -3196,23 +3329,40 @@ def process_recipe(
 
     quality_warnings = ingredient_instruction_gap_warnings(ingredients_clean, instructions_std)
 
-    return ordered_recipe_output(
-        recipe_out,
-        ingredients_clean,
-        instructions_std,
-        ing_emb,
-        recipe_quality_warnings=quality_warnings or None,
+    return (
+        ordered_recipe_output(
+            recipe_out,
+            ingredients_clean,
+            instructions_std,
+            ing_emb,
+            recipe_quality_warnings=quality_warnings or None,
+        ),
+        extra_stats,
     )
 
 
-def _progress_bar_line(current: int, total: int, *, width: int = 28) -> str:
-    """ASCII progress bar + completed count for terminal display."""
-    if total <= 0:
-        return "completed 0/0"
-    filled = min(width, int(width * current / total))
-    bar = "#" * filled + "-" * (width - filled)
-    pct = 100.0 * current / total
-    return f"[{bar}] completed {current}/{total} ({pct:.0f}%)"
+def _enrich_progress_line(
+    *,
+    done: int,
+    total: int,
+    recipe_index: int,
+    elapsed: float,
+    eta_sec: float | None,
+    det: int,
+    llm: int,
+    repair: int,
+    instr_llm: int,
+    width: int = 132,
+) -> str:
+    """Single-line enrich/pipeline status (stderr, \\r updates on TTY)."""
+    pct = 100.0 * done / total if total else 100.0
+    eta_s = _fmt_duration(eta_sec) if eta_sec is not None else "…"
+    line = (
+        f"[{done}/{total}] {pct:5.1f}% | recipe #{recipe_index} | "
+        f"elapsed {_fmt_duration(elapsed)} | ETA ~{eta_s} | "
+        f"det={det} llm={llm} repair={repair} instr_llm={instr_llm}"
+    )
+    return line[:width].ljust(width)
 
 
 def enrich_main() -> None:
@@ -3225,7 +3375,14 @@ def enrich_main() -> None:
         help="Output JSON (default: out.json in current directory)",
     )
     ap.add_argument("--mapping", "-m", default="unique_ingredient_names.json", help="Names + mapping file")
-    ap.add_argument("--limit", "-n", type=int, default=20, help="Only process first N recipes")
+    ap.add_argument(
+        "--limit",
+        "-n",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Process first N recipes (0 = entire file; default: 20)",
+    )
     ap.add_argument(
         "--keep-rest",
         action="store_true",
@@ -3264,6 +3421,20 @@ def enrich_main() -> None:
         action="store_true",
         help="Allow overwriting existing --output when not using --resume",
     )
+    ap.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Write output + checkpoint every N recipes (default: 1). Larger = less disk I/O; risk losing up to N−1 recipes if the process is killed between writes.",
+    )
+    ap.add_argument(
+        "--progress-every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Update progress line every N completed recipes (default: 1)",
+    )
     args = ap.parse_args()
 
     inp = Path(args.input).expanduser().resolve()
@@ -3299,7 +3470,7 @@ def enrich_main() -> None:
         print("Expected JSON array of recipes.", file=sys.stderr)
         sys.exit(1)
 
-    n = max(0, args.limit)
+    n = len(recipes) if args.limit == 0 else max(0, args.limit)
     head = recipes[:n]
     rest = recipes[n:]
     input_sha = _file_sha256(inp)
@@ -3342,6 +3513,9 @@ def enrich_main() -> None:
                 sys.exit(1)
             if bool(ck.get("already_normalized")) != bool(args.already_normalized):
                 print("Checkpoint --already-normalized does not match; refusing to resume.", file=sys.stderr)
+                sys.exit(1)
+            if int(ck.get("checkpoint_every", 1)) != int(args.checkpoint_every):
+                print("Checkpoint --checkpoint-every does not match; refusing to resume.", file=sys.stderr)
                 sys.exit(1)
             next_i = int(ck.get("next_recipe_index", 0))
             next_i = max(0, min(next_i, len(head)))
@@ -3386,6 +3560,7 @@ def enrich_main() -> None:
             client = None
         else:
             print(f"Using Ollama model: {args.model}", flush=True)
+            _print_gpu_and_ollama_status()
 
     use_ollama_instructions = bool(args.ollama_instructions and client)
     if args.ollama_instructions and not client:
@@ -3418,49 +3593,91 @@ def enrich_main() -> None:
             "keep_rest": args.keep_rest,
             "already_normalized": args.already_normalized,
             "mapping_path": str(map_path),
+            "checkpoint_every": int(args.checkpoint_every),
         }
         if complete:
             d["complete"] = True
         return d
 
+    checkpoint_every = max(1, int(args.checkpoint_every))
+    progress_every = max(1, int(args.progress_every))
+    progress_t0 = time.perf_counter()
+    show_progress = (not args.quiet) and (sys.stderr.isatty() or sys.stdout.isatty())
+    last_ck_line = False
+    det_acc = llm_acc = repair_acc = instr_llm_acc = 0
+
     try:
         for i in range(next_i, len(head)):
             work = copy.deepcopy(head[i])
+            st_norm = {"normalized": 0, "ollama": 0, "repair": 0, "unparseable": 0}
             if not args.already_normalized:
-                work, _stats = _process_single_recipe(work, client, use_ollama, args.model)
-            enriched.append(
-                process_recipe(
-                    work,
-                    mapping,
-                    client,
-                    args.model,
-                    use_ollama,
-                    use_ollama_instructions=use_ollama_instructions,
-                )
+                work, st_norm = _process_single_recipe(work, client, use_ollama, args.model)
+            det_acc += int(st_norm.get("normalized", 0))
+            llm_acc += int(st_norm.get("ollama", 0))
+            repair_acc += int(st_norm.get("repair", 0))
+            out_rec, st_ex = process_recipe(
+                work,
+                mapping,
+                client,
+                args.model,
+                use_ollama,
+                use_ollama_instructions=use_ollama_instructions,
             )
+            instr_llm_acc += int(st_ex.get("instruction_ollama", 0))
+            enriched.append(out_rec)
             done = i + 1
+            out_data = enriched + rest if args.keep_rest else enriched
+            if done % checkpoint_every == 0 or done == len(head):
+                _atomic_write_json(out_path, out_data)
+                with open(checkpoint_path, "w", encoding="utf-8") as f:
+                    json.dump(_enrich_checkpoint_payload(done, complete=False), f, indent=2)
+                ck_msg = f"checkpoint {done}/{len(head)} → {out_path.name}"
+                if show_progress:
+                    print(f"\n  {ck_msg}", flush=True, file=sys.stderr)
+                else:
+                    print(f"  {ck_msg}", flush=True, file=sys.stderr)
+            elapsed = time.perf_counter() - progress_t0
+            completed_this_run = done - next_i
+            eta_sec = (
+                (len(head) - done) * (elapsed / completed_this_run)
+                if completed_this_run > 0
+                else None
+            )
+            if not args.quiet and total and (done % progress_every == 0 or done == len(head)):
+                line = _enrich_progress_line(
+                    done=done,
+                    total=total,
+                    recipe_index=i,
+                    elapsed=elapsed,
+                    eta_sec=eta_sec,
+                    det=det_acc,
+                    llm=llm_acc,
+                    repair=repair_acc,
+                    instr_llm=instr_llm_acc,
+                )
+                if show_progress:
+                    print(f"\r{line}  → {out_path.name}", end="", flush=True, file=sys.stderr)
+                    last_ck_line = True
+                else:
+                    print(line.strip(), flush=True, file=sys.stderr)
+    except KeyboardInterrupt:
+        if show_progress and last_ck_line:
+            print(file=sys.stderr)
+        if enriched:
             out_data = enriched + rest if args.keep_rest else enriched
             _atomic_write_json(out_path, out_data)
             with open(checkpoint_path, "w", encoding="utf-8") as f:
-                json.dump(_enrich_checkpoint_payload(done, complete=False), f, indent=2)
-            if not args.quiet and total:
-                print(
-                    f"\rEnriching {_progress_bar_line(done, total)}  saved → {out_path.name}",
-                    end="",
-                    file=sys.stderr,
-                    flush=True,
-                )
-    except KeyboardInterrupt:
-        print(file=sys.stderr)
+                json.dump(_enrich_checkpoint_payload(len(enriched), complete=False), f, indent=2)
         print(
             f"\nInterrupted after {len(enriched)} recipe(s). "
             f"Partial output saved to {out_path}\n"
-            f"Resume with: python recipe_pipeline.py enrich --resume ... (same --input, --limit, --keep-rest, --output)",
+            f"Resume with: python recipe_pipeline.py enrich --resume ... "
+            f"(same --input, --limit, --keep-rest, --output, --checkpoint-every)",
             file=sys.stderr,
         )
         sys.exit(130)
 
-    if not args.quiet and total:
+    if not args.quiet and total and show_progress:
         print(file=sys.stderr)
 
     out_data = enriched + rest if args.keep_rest else enriched
@@ -3469,6 +3686,11 @@ def enrich_main() -> None:
         json.dump(_enrich_checkpoint_payload(len(head), complete=True), f, indent=2)
 
     print(f"Wrote {len(out_data)} recipe(s) ({n} enriched) → {out_path}")
+    if not args.quiet:
+        print(
+            f"  Totals: det={det_acc} llm={llm_acc} repair={repair_acc} instr_llm={instr_llm_acc}",
+            flush=True,
+        )
 
 
 def pipeline_main() -> None:
@@ -3488,7 +3710,14 @@ def pipeline_main() -> None:
     )
     ap.add_argument("--output", "-o", default="out.json", help="After stage 2: full enrich output")
     ap.add_argument("--mapping", "-m", default="unique_ingredient_names.json", help="Names + mapping file")
-    ap.add_argument("--limit", "-n", type=int, default=20, help="Only process first N recipes")
+    ap.add_argument(
+        "--limit",
+        "-n",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Process first N recipes (0 = entire file; default: 20)",
+    )
     ap.add_argument("--keep-rest", action="store_true", help="Append remaining recipes unchanged to both outputs")
     ap.add_argument("--model", default=DEFAULT_OLLAMA_MODEL, help="Ollama model")
     ap.add_argument("--no-ollama", action="store_true", help="Skip Ollama for ingredient normalization")
@@ -3501,6 +3730,20 @@ def pipeline_main() -> None:
     ap.add_argument("--resume", action="store_true", help="Resume both partial outputs + checkpoint")
     ap.add_argument("--checkpoint-file", default=None, help="Checkpoint (default: <output>.checkpoint.json)")
     ap.add_argument("--force", action="store_true", help="Overwrite existing outputs when not resuming")
+    ap.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Write both outputs + checkpoint every N recipes (default: 1). Larger = less disk I/O.",
+    )
+    ap.add_argument(
+        "--progress-every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Update progress line every N completed recipes (default: 1)",
+    )
     args = ap.parse_args()
 
     inp = Path(args.input).expanduser().resolve()
@@ -3537,7 +3780,7 @@ def pipeline_main() -> None:
         print("Expected JSON array of recipes.", file=sys.stderr)
         sys.exit(1)
 
-    n = max(0, args.limit)
+    n = len(recipes) if args.limit == 0 else max(0, args.limit)
     head = recipes[:n]
     rest = recipes[n:]
     input_sha = _file_sha256(inp)
@@ -3594,6 +3837,9 @@ def pipeline_main() -> None:
             if ck.get("output_path") != str(out_path):
                 print("Checkpoint output path mismatch; refusing to resume.", file=sys.stderr)
                 sys.exit(1)
+            if int(ck.get("checkpoint_every", 1)) != int(args.checkpoint_every):
+                print("Checkpoint --checkpoint-every mismatch; refusing to resume.", file=sys.stderr)
+                sys.exit(1)
             next_i = int(ck.get("next_recipe_index", 0))
             next_i = max(0, min(next_i, len(head)))
             if len(head) > 0 and next_i >= len(head) and ck.get("complete"):
@@ -3635,6 +3881,7 @@ def pipeline_main() -> None:
             client = None
         else:
             print(f"Using Ollama model: {args.model}", flush=True)
+            _print_gpu_and_ollama_status()
 
     use_ollama_instructions = bool(args.ollama_instructions and client)
     if args.ollama_instructions and not client:
@@ -3654,54 +3901,96 @@ def pipeline_main() -> None:
             "normalized_output_path": str(norm_path),
             "keep_rest": args.keep_rest,
             "mapping_path": str(map_path),
+            "checkpoint_every": int(args.checkpoint_every),
         }
         if complete:
             d["complete"] = True
         return d
 
+    checkpoint_every = max(1, int(args.checkpoint_every))
+    progress_every = max(1, int(args.progress_every))
+    progress_t0 = time.perf_counter()
+    show_progress = (not args.quiet) and (sys.stderr.isatty() or sys.stdout.isatty())
+    last_ck_line = False
+    det_acc = llm_acc = repair_acc = instr_llm_acc = 0
+
     try:
         for i in range(next_i, len(head)):
             work = copy.deepcopy(head[i])
-            work, _stats = _process_single_recipe(work, client, use_ollama, args.model)
+            work, st_norm = _process_single_recipe(work, client, use_ollama, args.model)
+            det_acc += int(st_norm.get("normalized", 0))
+            llm_acc += int(st_norm.get("ollama", 0))
+            repair_acc += int(st_norm.get("repair", 0))
             normalized_accum.append(work)
             norm_data = normalized_accum + rest if args.keep_rest else normalized_accum
-            _atomic_write_json(norm_path, norm_data)
 
-            enriched.append(
-                process_recipe(
-                    work,
-                    mapping,
-                    client,
-                    args.model,
-                    use_ollama,
-                    use_ollama_instructions=use_ollama_instructions,
-                )
+            out_rec, st_ex = process_recipe(
+                work,
+                mapping,
+                client,
+                args.model,
+                use_ollama,
+                use_ollama_instructions=use_ollama_instructions,
             )
+            instr_llm_acc += int(st_ex.get("instruction_ollama", 0))
+            enriched.append(out_rec)
             done = i + 1
             out_data = enriched + rest if args.keep_rest else enriched
+            if done % checkpoint_every == 0 or done == len(head):
+                _atomic_write_json(norm_path, norm_data)
+                _atomic_write_json(out_path, out_data)
+                with open(checkpoint_path, "w", encoding="utf-8") as f:
+                    json.dump(_pl_ck(done, complete=False), f, indent=2)
+                ck_msg = f"checkpoint {done}/{len(head)} → {norm_path.name} + {out_path.name}"
+                if show_progress:
+                    print(f"\n  {ck_msg}", flush=True, file=sys.stderr)
+                else:
+                    print(f"  {ck_msg}", flush=True, file=sys.stderr)
+            elapsed = time.perf_counter() - progress_t0
+            completed_this_run = done - next_i
+            eta_sec = (
+                (len(head) - done) * (elapsed / completed_this_run)
+                if completed_this_run > 0
+                else None
+            )
+            if not args.quiet and total and (done % progress_every == 0 or done == len(head)):
+                line = _enrich_progress_line(
+                    done=done,
+                    total=total,
+                    recipe_index=i,
+                    elapsed=elapsed,
+                    eta_sec=eta_sec,
+                    det=det_acc,
+                    llm=llm_acc,
+                    repair=repair_acc,
+                    instr_llm=instr_llm_acc,
+                )
+                if show_progress:
+                    print(f"\r{line}  | {norm_path.name}+{out_path.name}", end="", flush=True, file=sys.stderr)
+                    last_ck_line = True
+                else:
+                    print(line.strip(), flush=True, file=sys.stderr)
+    except KeyboardInterrupt:
+        if show_progress and last_ck_line:
+            print(file=sys.stderr)
+        if enriched:
+            norm_data = normalized_accum + rest if args.keep_rest else normalized_accum
+            out_data = enriched + rest if args.keep_rest else enriched
+            _atomic_write_json(norm_path, norm_data)
             _atomic_write_json(out_path, out_data)
             with open(checkpoint_path, "w", encoding="utf-8") as f:
-                json.dump(_pl_ck(done, complete=False), f, indent=2)
-            if not args.quiet and total:
-                print(
-                    f"\rPipeline {_progress_bar_line(done, total)}  "
-                    f"{norm_path.name} + {out_path.name}",
-                    end="",
-                    file=sys.stderr,
-                    flush=True,
-                )
-    except KeyboardInterrupt:
-        print(file=sys.stderr)
+                json.dump(_pl_ck(len(enriched), complete=False), f, indent=2)
         print(
             f"\nInterrupted after {len(enriched)} recipe(s).\n"
             f"  {norm_path.name} = stage 1 (normalized ingredients)\n"
             f"  {out_path.name} = stage 2 (enriched)\n"
-            f"Resume: python recipe_pipeline.py pipeline --resume ... (same -i, -n, -N, -o, --keep-rest)",
+            f"Resume: python recipe_pipeline.py pipeline --resume ... "
+            f"(same -i, -n, -N, -o, --keep-rest, --checkpoint-every)",
             file=sys.stderr,
         )
         sys.exit(130)
 
-    if not args.quiet and total:
+    if not args.quiet and total and show_progress:
         print(file=sys.stderr)
 
     norm_data = normalized_accum + rest if args.keep_rest else normalized_accum
@@ -3715,6 +4004,11 @@ def pipeline_main() -> None:
         f"Pipeline done: {len(out_data)} recipe(s) in {out_path.name} "
         f"(stage 1 snapshot: {norm_path.name})"
     )
+    if not args.quiet:
+        print(
+            f"  Totals: det={det_acc} llm={llm_acc} repair={repair_acc} instr_llm={instr_llm_acc}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
