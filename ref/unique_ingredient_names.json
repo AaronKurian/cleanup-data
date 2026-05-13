@@ -1,0 +1,310 @@
+{
+    "unique_count": 126,
+    "names": [
+      "(about 2 cups ) reduced-fat",   //mozzarella cheese is what this means
+      "(makes 1\u00a01/2 cups)", //left as it is
+      "5.5 kg piece 5-to-5.5 pound flat-cut brisket",
+      "ancho chile powder*",
+      "Ancho Chile Sauce",
+      "apple cider vinegar",
+      "bacon",
+      "basil leaves",
+      "beets",
+      "boiling water",
+      "brandied sour cherry",
+      "brandied sour cherry juice",
+      "breadcrumbs",
+      "broccoli rabe",
+      "butter",
+      "button mushrooms",
+      "capers",
+      "carrots",
+      "cayenne",
+      "cayenne pepper",
+      "celery",
+      "cherry tomatoes",
+      "chickpeas",
+      "chili powder",
+      "chopped basil",
+      "chopped celery",
+      "chopped flat-leaf parsley",
+      "chopped green bell pepper",
+      "chopped Italian parsley",
+      "chopped onion",
+      "chopped oregano",
+      "chopped parsley",
+      "chopped pimento",
+      "chopped watercress",
+      "coarse kosher salt",
+      "Coarse salt",
+      "Coarse salt and fresh ground pepper",
+      "cold unsalted butter",
+      "coriander seeds",
+      "crushed tomatoes",
+      "Dijon mustard",
+      "dried green or yellow split peas",
+      "dry mustard",
+      "egg",
+      "extra virgin olive oil",
+      "extra-virgin olive oil",
+      "fresh goat cheese",
+      "Freshly ground black pepper",
+      "freshly squeezed lemon juice",
+      "frozen rectangle cheese ravioli (about 1 inch by 1.5 inches; no more than 4 g of fat per 9-piece serving; I used Rosetto)",
+      "garlic",
+      "golden brown sugar",
+      "granulated garlic",
+      "green onion",
+      "green onion greens",
+      "ground black pepper",
+      "ground cumin",
+      "hickory",
+      "jalape\u00f1o chili",
+      "jumbo lump crabmeat",
+      "kalamata olives",
+      "Kosher salt",
+      "Kosher salt and freshly ground black pepper to taste",
+      "Kosher salt, freshly ground pepper",
+      "lemon juice",
+      "Lemon wedges for serving, optional",
+      "lentils",
+      "low-fat lower-sodium marinara sauce",
+      "low-sodium tamari soy sauce",
+      "minced garlic",
+      "minced parsley",
+      "minced shallot",
+      "neutral-tasting oil",
+      "Nonstick cooking spray",
+      "olive oil",
+      "onion",
+      "orange juice",
+      "orange peel",
+      "oregano",
+      "paprika",
+      "parmesan cheese",
+      "Parmesan cheese",
+      "pasta shells",
+      "peeled ginger",
+      "penne",
+      "pepper",
+      "porcini",
+      "prepared horseradish",
+      "radicchio",
+      "red beet",
+      "red onion",
+      "red pepper flakes",
+      "red potatoes",
+      "red-skinned potatoes",
+      "red-wine vinegar",
+      "reduced-sodium chicken broth",
+      "rice vinegar",
+      "salmon",
+      "salt",
+      "Salt and black pepper to taste",
+      "Salt teaspoon black pepper",
+      "saltine",
+      "sesame oil",
+      "sesame seeds",
+      "solid white tuna",
+      "sour cream",
+      "soy sauce",
+      "sugar",
+      "sweet potato",
+      "swordfish steaks",
+      "toasted sesame oil",
+      "uncooked shrimp",
+      "unsalted butter",
+      "vegetable oil",
+      "vermouth",
+      "water",
+      "whiskey",
+      "white miso",
+      "white wine",
+      "whole grain penne",
+      "whole milk",
+      "whole salmon",
+      "Worcestershire sauce",
+      "yellow onion",
+      "zucchini",
+      "\u00bd cup cooked leftover rice or any other grain" //cooked rice is what meant
+    ]
+  }
+  
+  
+  
+  // ingredient name map
+  {
+  
+    # ----- cheeses -----
+    "(about 2 cups ) reduced-fat": "mozzarella cheese",
+    "fresh goat cheese": "goat cheese",
+    "parmesan cheese": "parmesan cheese",
+    "Parmesan cheese": "parmesan cheese",
+    
+    # ----- grains / pasta -----
+    "pasta shells": "pasta",
+    "penne": "pasta",
+    "whole grain penne": "pasta",
+    "frozen rectangle cheese ravioli (about 1 inch by 1.5 inches; no more than 4 g of fat per 9-piece serving; I used Rosetto)": "cheese ravioli",
+    
+    # ----- rice -----
+    "½ cup cooked leftover rice or any other grain": "cooked rice",
+    
+    # ----- vegetables -----
+    "broccoli rabe": "broccoli rabe",
+    "carrots": "carrot",
+    "celery": "celery",
+    "chopped celery": "celery",
+    "radicchio": "radicchio",
+    "red beet": "beet",
+    "beets": "beet",
+    "zucchini": "zucchini",
+    "sweet potato": "sweet potato",
+    "red potatoes": "potato",
+    "red-skinned potatoes": "potato",
+    "yellow onion": "onion",
+    "red onion": "onion",
+    "onion": "onion",
+    "chopped onion": "onion",
+    
+    # ----- greens / herbs -----
+    "basil leaves": "basil",
+    "chopped basil": "basil",
+    "chopped parsley": "parsley",
+    "minced parsley": "parsley",
+    "chopped Italian parsley": "parsley",
+    "chopped flat-leaf parsley": "parsley",
+    "chopped watercress": "watercress",
+    
+    # ----- aromatics -----
+    "garlic": "garlic",
+    "minced garlic": "garlic",
+    "granulated garlic": "garlic",
+    "peeled ginger": "ginger",
+    "minced shallot": "shallot",
+    
+    # ----- peppers / spices -----
+    "cayenne": "cayenne pepper",
+    "cayenne pepper": "cayenne pepper",
+    "chili powder": "chili powder",
+    "ancho chile powder*": "ancho chili powder",
+    "paprika": "paprika",
+    "ground cumin": "cumin",
+    "red pepper flakes": "red pepper flakes",
+    
+    # ----- oils -----
+    "olive oil": "olive oil",
+    "extra virgin olive oil": "olive oil",
+    "extra-virgin olive oil": "olive oil",
+    "vegetable oil": "vegetable oil",
+    "neutral-tasting oil": "vegetable oil",
+    "sesame oil": "sesame oil",
+    "toasted sesame oil": "sesame oil",
+    
+    # ----- sauces / condiments -----
+    "Dijon mustard": "dijon mustard",
+    "dry mustard": "mustard powder",
+    "prepared horseradish": "horseradish",
+    "soy sauce": "soy sauce",
+    "low-sodium tamari soy sauce": "soy sauce",
+    "Worcestershire sauce": "worcestershire sauce",
+    "apple cider vinegar": "apple cider vinegar",
+    "red-wine vinegar": "red wine vinegar",
+    "rice vinegar": "rice vinegar",
+    "lemon juice": "lemon juice",
+    "freshly squeezed lemon juice": "lemon juice",
+    "orange juice": "orange juice",
+    
+    # ----- dairy -----
+    "butter": "butter",
+    "unsalted butter": "butter",
+    "cold unsalted butter": "butter",
+    "whole milk": "milk",
+    "sour cream": "sour cream",
+    
+    # ----- seafood / meat -----
+    "uncooked shrimp": "shrimp",
+    "salmon": "salmon",
+    "whole salmon": "salmon",
+    "swordfish steaks": "swordfish",
+    "solid white tuna": "tuna",
+    "jumbo lump crabmeat": "crab",
+    
+    # ----- legumes -----
+    "lentils": "lentil",
+    "dried green or yellow split peas": "split peas",
+    "chickpeas": "chickpea",
+    
+    # ----- mushrooms -----
+    "porcini": "porcini mushroom",
+    "button mushrooms": "mushroom",
+    
+    # ----- tomatoes -----
+    "cherry tomatoes": "cherry tomato",
+    "crushed tomatoes": "tomato",
+    
+    # ----- bread / crackers -----
+    "breadcrumbs": "breadcrumbs",
+    "saltine": "saltine cracker",
+    
+    # ----- nuts / seeds -----
+    "sesame seeds": "sesame seeds",
+    "coriander seeds": "coriander seeds",
+    
+    # ----- sweeteners -----
+    "sugar": "sugar",
+    "golden brown sugar": "brown sugar",
+    
+    # ----- liquids -----
+    "water": "water",
+    "boiling water": "boiling water",
+    "reduced-sodium chicken broth": "chicken broth",
+    "white wine": "white wine",
+    "vermouth": "vermouth",
+    "whiskey": "whiskey",
+    
+    # ----- flavoring -----
+    "orange peel": "orange zest",
+    
+    # ----- olives -----
+    "kalamata olives": "kalamata olive",
+    
+    # ----- tuna burger ingredients -----
+    "green onion": "green onion",
+    "green onion greens": "green onion",
+    "chopped pimento": "pimento",
+    
+    # ----- seafood garnish -----
+    "capers": "capers",
+    
+    # ----- specialty -----
+    "white miso": "miso",
+    
+    # ----- wood (for smoking) -----
+    "hickory": "hickory wood",
+    
+    # ----- beverages -----
+    "brandied sour cherry": "brandied cherry",
+    "brandied sour cherry juice": "cherry juice",
+    
+    # ----- misc -----
+    "pepper": "black pepper",
+    "ground black pepper": "black pepper",
+    "Freshly ground black pepper": "black pepper",
+    
+    "salt": "salt",
+    "Kosher salt": "salt",
+    "coarse kosher salt": "salt",
+    "Coarse salt": "salt",
+    "Coarse salt and fresh ground pepper": "salt",
+    "Salt and black pepper to taste": "salt",
+    "Kosher salt and freshly ground black pepper to taste": "salt",
+    "Kosher salt, freshly ground pepper": "salt",
+    "Salt teaspoon black pepper": "salt",
+    
+    # ----- misc cleanup -----
+    "Ancho Chile Sauce": "ancho chile sauce",
+    "Nonstick cooking spray": "cooking spray",
+    "Lemon wedges for serving, optional": "lemon",
+    "(makes 1½ cups)": "unknown"
+    }

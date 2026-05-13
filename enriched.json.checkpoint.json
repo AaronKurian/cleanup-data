@@ -1,0 +1,13 @@
+{
+  "next_recipe_index": 20935,
+  "head_len": 20935,
+  "limit": 20935,
+  "input_path": "D:\\cleanup-data\\new_recipee_data.json",
+  "input_sha256": "96175cd5005602e5824932ed1f649276114b103619a297524349172172bf6d2e",
+  "output_path": "D:\\cleanup-data\\enriched.json",
+  "keep_rest": true,
+  "already_normalized": false,
+  "mapping_path": "D:\\cleanup-data\\ref\\unique_ingredient_names.json",
+  "checkpoint_every": 25,
+  "complete": true
+}
